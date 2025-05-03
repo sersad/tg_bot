@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  moderation-bot:
+    build: .
+    container_name: moderation_bot
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data  # Монтируем всю папку
+      - ./moderation.log:/app/moderation.log
+    env_file:
+      - .env  # Используем отдельный файл с переменными окружения
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0) if os.getenv('BOT_TOKEN') and os.getenv('BANNED_PHRASES') else exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
