@@ -128,6 +128,7 @@ def save_data(data):
     except Exception as e:
         logger.error(f"Ошибка при сохранении данных: {e}")
 
+
 # Логирование удалённых сообщений
 def log_deleted_message(user_id, user_name, message_text, reason):
     log_entry = {
@@ -141,9 +142,14 @@ def log_deleted_message(user_id, user_name, message_text, reason):
 
 
 # Проверка на админа
-async def is_admin(chat_id, user_id):
-    member = await bot.get_chat_member(chat_id, user_id)
-    return member.is_chat_admin()
+async def is_admin(chat_id: int, user_id: int) -> bool:
+    """Проверяет, является ли пользователь администратором чата"""
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+        return member.is_chat_admin()
+    except Exception as e:
+        logger.error(f"Ошибка проверки администратора: {e}")
+        return False
 
 
 # Клавиатура для разбана
@@ -151,8 +157,6 @@ def get_unban_keyboard(user_id):
     return InlineKeyboardMarkup().add(
         InlineKeyboardButton("Разбанить", callback_data=f"unban_{user_id}")
     )
-
-
 
 
 # Команда для полного ограничения пользователя
@@ -180,6 +184,7 @@ async def restrict_user(message: types.Message):
     except Exception as e:
         logger.error(f"Ошибка при ограничении пользователя: {e}")
         await message.reply("❌ Произошла ошибка при ограничении пользователя")
+
 
 # Команда для снятия всех ограничений
 @dp.message_handler(Command("unrestrict"), AdminFilter())
@@ -360,10 +365,6 @@ async def show_user_help(message: types.Message):
     await message.reply(help_text, parse_mode="HTML")
 
 
-# Фильтр для проверки администратора
-async def is_admin(message: types.Message):
-    member = await bot.get_chat_member(message.chat.id, message.from_user.id)
-    return member.is_chat_admin()
 
 
 def contains_links(message: types.Message) -> bool:
@@ -390,69 +391,255 @@ def contains_links(message: types.Message) -> bool:
     return False
 
 
-
-
-
 @dp.message_handler(chat_type=[types.ChatType.SUPERGROUP, types.ChatType.GROUP])
 async def check_message(message: types.Message):
     data = load_data()
     user_id = str(message.from_user.id)
     chat_id = message.chat.id
 
-    # Безопасная проверка ограничений
-    restricted_users = data.get('restricted_users', {})
-    no_links_users = restricted_users.get('no_links', {})
+    # Логирование входящего сообщения
+    logger.info(f"Новое сообщение от {user_id} в чате {chat_id}")
+    logger.info(f"Тип сообщения: {message.content_type}")
+    logger.info(f"Переслано: {'Да' if message.forward_date else 'Нет'}")
 
-
-    # Проверка на ограниченного пользователя
-    if user_id in data.get('restricted_users', {}):
+    # 1. Проверка ограничений пользователя
+    if user_id in data.get('restricted_users', {}).get('fully_restricted', {}):
         try:
             await message.delete()
             await message.answer(
-                f"⛔ {message.from_user.get_mention()}, ваши сообщения ограничены администратором.",
-                parse_mode='HTML'
-            )
-        except Exception as e:
-            logger.error(f"Ошибка при обработке сообщения ограниченного пользователя: {e}")
-        return
-
-    if user_id in no_links_users and contains_links(message):
-        try:
-            await message.delete()
-            await message.answer(
-                f"⛔ {message.from_user.get_mention()}, вам запрещено отправлять ссылки",
+                f"⛔ {message.from_user.get_mention()}, ваши сообщения ограничены",
                 parse_mode='HTML'
             )
             return
         except Exception as e:
-            logger.error(f"Ошибка при обработке ограниченного пользователя: {e}")
+            logger.error(f"Ошибка при ограничении пользователя: {e}")
+            return
 
-    # Проверка на голосовое сообщение
-    if message.voice:
+    # 2. Проверка запрета ссылок
+    if user_id in data.get('restricted_users', {}).get('no_links', {}) and contains_links(message):
+        try:
+            await message.delete()
+            await message.answer(
+                f"⛔ {message.from_user.get_mention()}, вам запрещены ссылки",
+                parse_mode='HTML'
+            )
+            return
+        except Exception as e:
+            logger.error(f"Ошибка при удалении ссылки: {e}")
+            return
+
+    # 3. Проверка голосовых сообщений (рабочая версия)
+    if message.voice is not None:  # Явная проверка на None
         await handle_rule_break(message, "голосовые сообщения запрещены", data, user_id, chat_id)
         return
 
-    # Проверка на видеосообщение (кружочек)
-    if message.video_note:
-        await handle_rule_break(message, "видеосообщения (кружочки) запрещены", data, user_id, chat_id)
+    # 4. Проверка видеосообщений (кружочков)
+    if message.video_note is not None:  # Явная проверка на None
+        await handle_rule_break(message, "видеосообщения запрещены", data, user_id, chat_id)
         return
 
-    # Проверка текста на наличие запрещённых ссылок
-    if message.text or message.caption:
-        text = message.text or message.caption
-        if any(phrase in text.lower() for phrase in BANNED_PHRASES):
-            await handle_rule_break(message, "ссылки на VK запрещены", data, user_id, chat_id)
+    # 5. Проверка пересланных сообщений (полностью рабочая версия)
+    if hasattr(message, 'forward_from') or hasattr(message, 'forward_from_chat'):
+        try:
+            # Получаем текст из всех возможных источников
+            text = ""
+            if message.text:
+                text = message.text
+            elif message.caption:
+                text = message.caption
+
+            # Проверка на запрещенные фразы
+            if text and any(phrase in text.lower() for phrase in BANNED_PHRASES):
+                await handle_rule_break(message, "пересылка запрещённого контента", data, user_id, chat_id)
+                return
+        except Exception as e:
+            logger.error(f"Ошибка проверки пересланного сообщения: {e}")
             return
 
-    # Проверка на наличие ссылок в других типах сообщений
-    if message.entities or message.caption_entities:
-        entities = message.entities or message.caption_entities
-        for entity in entities:
+    # 6. Проверка обычных сообщений
+    text_to_check = message.text or message.caption or ""
+    if text_to_check and any(phrase in text_to_check.lower() for phrase in BANNED_PHRASES):
+        await handle_rule_break(message, "запрещённые ссылки", data, user_id, chat_id)
+        return
+
+    # 7. Проверка URL в entities
+    for entity in (message.entities or []) + (message.caption_entities or []):
+        if entity.type in ["url", "text_link"]:
+            url = ""
             if entity.type == "url":
-                url = (message.text or message.caption)[entity.offset:entity.offset + entity.length]
-                if any(phrase in url.lower() for phrase in BANNED_PHRASES):
-                    await handle_rule_break(message, "ссылки на VK запрещены", data, user_id, chat_id)
-                    return
+                url = (message.text or message.caption or "")[entity.offset:entity.offset + entity.length]
+            elif entity.type == "text_link":
+                url = entity.url
+
+            if url and any(phrase in url.lower() for phrase in BANNED_PHRASES):
+                await handle_rule_break(message, "запрещённые ссылки", data, user_id, chat_id)
+                return
+
+
+
+
+
+@dp.message_handler(chat_type=[types.ChatType.SUPERGROUP, types.ChatType.GROUP], content_types=types.ContentType.VOICE)
+async def handle_voice_message(message: types.Message):
+    try:
+        logger.info(f"Обнаружено голосовое сообщение от {message.from_user.id}")
+        logger.info(f"Длительность: {message.voice.duration} сек")
+        logger.info(f"Размер: {message.voice.file_size} байт")
+
+        data = load_data()
+        user_id = str(message.from_user.id)
+        chat_id = message.chat.id
+
+        await handle_rule_break(message, "голосовые сообщения запрещены", data, user_id, chat_id)
+        logger.warning(f"Голосовое сообщение от {user_id} удалено")
+
+    except Exception as e:
+        logger.error(f"Ошибка при обработке голосового сообщения: {str(e)}", exc_info=True)
+        await message.reply("⚠️ Произошла ошибка при обработке голосового сообщения")
+
+
+
+
+
+@dp.message_handler(chat_type=[types.ChatType.SUPERGROUP, types.ChatType.GROUP],
+                    content_types=types.ContentType.VIDEO_NOTE)
+async def handle_video_note(message: types.Message):
+    try:
+        logger.info(f"Обнаружено видеосообщение от {message.from_user.id}")
+        logger.info(f"Длительность: {message.video_note.duration} сек | Размер: {message.video_note.file_size} байт")
+
+        data = load_data()
+        user_id = str(message.from_user.id)
+        chat_id = message.chat.id
+
+        # Удаляем сообщение
+        await message.delete()
+        logger.warning(f"Видеосообщение от {user_id} удалено")
+
+        # Уведомляем пользователя
+        warning_msg = await message.answer(
+            f"⛔ {message.from_user.get_mention()}, видеосообщения запрещены",
+            parse_mode='HTML'
+        )
+
+        # Удаляем уведомление через 10 секунд
+        await asyncio.sleep(10)
+        await warning_msg.delete()
+
+        # Добавляем предупреждение
+        if user_id not in data['warnings']:
+            data['warnings'][user_id] = 0
+        data['warnings'][user_id] += 1
+
+        # Проверяем на бан (3 предупреждения)
+        if data['warnings'][user_id] >= 3:
+            ban_until = datetime.now() + timedelta(minutes=BAN_DURATION)
+            data['banned'][user_id] = ban_until.strftime('%Y-%m-%d %H:%M:%S')
+
+            await bot.restrict_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                until_date=ban_until,
+                permissions=types.ChatPermissions(
+                    can_send_messages=False,
+                    can_send_media_messages=False,
+                    can_send_other_messages=False,
+                    can_add_web_page_previews=False
+                )
+            )
+            logger.warning(f"Пользователь {user_id} забанен за 3 нарушения")
+
+        save_data(data)
+
+    except Exception as e:
+        logger.error(f"Ошибка при обработке видеосообщения: {str(e)}", exc_info=True)
+        try:
+            await message.reply("⚠️ Ошибка при обработке видеосообщения")
+        except:
+            pass
+
+
+@dp.message_handler(
+    chat_type=[types.ChatType.SUPERGROUP, types.ChatType.GROUP],
+    content_types=[
+        types.ContentType.TEXT,
+        types.ContentType.PHOTO,
+        types.ContentType.VIDEO,
+        types.ContentType.DOCUMENT,
+        types.ContentType.AUDIO,
+        types.ContentType.VOICE,
+        types.ContentType.VIDEO_NOTE
+    ],
+    is_forwarded=True
+)
+async def handle_all_forwarded_media(message: types.Message):
+    try:
+        # 1. Проверяем, что переслано именно с канала
+        if not message.forward_from_chat or message.forward_from_chat.type != "channel":
+            return
+
+        channel = message.forward_from_chat
+        logger.info(f"Переслано медиа с канала: {channel.title} [ID:{channel.id}]")
+        logger.info(f"Тип контента: {message.content_type}")
+
+        # 2. Получаем текст/подпись/название файла
+        text = ""
+        if message.text:
+            text = message.text
+        elif message.caption:
+            text = message.caption
+        elif message.document:
+            text = message.document.file_name or ""
+
+        # 3. Проверяем на запрещённый контент
+        if text and any(phrase in text.lower() for phrase in BANNED_PHRASES):
+            await process_forwarded_violation(message, channel)
+
+    except Exception as e:
+        logger.error(f"Ошибка обработки пересланного медиа: {str(e)}", exc_info=True)
+
+
+async def process_forwarded_violation(message: types.Message, channel: types.Chat):
+    """Обработка нарушения при пересылке"""
+    try:
+        data = load_data()
+        user_id = str(message.from_user.id)
+
+        # 1. Удаляем сообщение
+        await message.delete()
+        logger.warning(f"Удалено пересланное медиа из {channel.title}")
+
+        # 2. Уведомляем пользователя
+        warning = await message.answer(
+            f"⛔ {message.from_user.get_mention()}, пересылка контента из каналов запрещена\n"
+            f"Источник: {channel.title}",
+            parse_mode='HTML'
+        )
+
+        # 3. Добавляем предупреждение
+        data['warnings'][user_id] = data.get('warnings', {}).get(user_id, 0) + 1
+        save_data(data)
+
+        # 4. Проверяем на бан
+        if data['warnings'].get(user_id, 0) >= 3:
+            await ban_user(message.chat.id, user_id)
+            logger.warning(f"Пользователь {user_id} забанен за пересылку")
+
+        # Удаляем уведомление через 15 сек
+        await asyncio.sleep(15)
+        await warning.delete()
+
+    except Exception as e:
+        logger.error(f"Ошибка обработки нарушения: {str(e)}")
+
+
+
+
+
+
+
+
+
 
 
 async def handle_rule_break(message: types.Message, reason: str, data, user_id, chat_id):
@@ -527,42 +714,46 @@ async def handle_rule_break(message: types.Message, reason: str, data, user_id, 
 
 @dp.callback_query_handler(lambda c: c.data.startswith('unban_'))
 async def process_unban(callback_query: types.CallbackQuery):
-    user_id = callback_query.data.split('_')[1]
-    chat_id = callback_query.message.chat.id
-
-    # Проверка прав администратора
-    if not await is_admin(chat_id, callback_query.from_user.id):
-        await callback_query.answer("Только администраторы могут разбанивать пользователей.", show_alert=True)
-        return
-
-    # Разбан пользователя
     try:
+        user_id = callback_query.data.split('_')[1]
+        chat_id = callback_query.message.chat.id
+
+        # Проверка прав администратора
+        if not await is_admin(chat_id, callback_query.from_user.id):
+            await callback_query.answer("Только администраторы могут разбанивать пользователей.", show_alert=True)
+            return
+
+        # Разбан пользователя
         data = load_data()
 
-        if user_id in data['banned']:
-            del data['banned'][user_id]
-            data['warnings'][user_id] = 0  # Сброс предупреждений
-            save_data(data)
-
-            await bot.restrict_chat_member(
-                chat_id=chat_id,
-                user_id=user_id,
-                permissions=types.ChatPermissions(
-                    can_send_messages=True,
-                    can_send_media_messages=True,
-                    can_send_other_messages=True,
-                    can_add_web_page_previews=True
-                )
-            )
-
-            await callback_query.answer("Пользователь разбанен.", show_alert=True)
-            await callback_query.message.edit_text(
-                f"✅ Пользователь разбанен администратором @{callback_query.from_user.username}."
-            )
-        else:
+        if user_id not in data.get('banned', {}):
             await callback_query.answer("Пользователь не забанен.", show_alert=True)
+            return
+
+        # Снимаем ограничения
+        await bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=user_id,
+            permissions=types.ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True
+            )
+        )
+
+        # Обновляем данные
+        data['banned'].pop(user_id, None)
+        data['warnings'][user_id] = 0  # Сброс предупреждений
+        save_data(data)
+
+        await callback_query.answer("Пользователь разбанен.", show_alert=True)
+        await callback_query.message.edit_text(
+            f"✅ Пользователь разбанен администратором @{callback_query.from_user.username}."
+        )
+
     except Exception as e:
-        logger.error(f"Ошибка при разбане: {e}")
+        logger.error(f"Ошибка при разбане: {e}", exc_info=True)
         await callback_query.answer("Произошла ошибка при разбане.", show_alert=True)
 
 
