@@ -78,6 +78,7 @@ def init_data_file():
             json.dump(initial_data, f, indent=4)
         os.chmod(data_file, 0o666)
 
+
 def load_data():
     default_data = {
         "warnings": {},
@@ -97,12 +98,12 @@ def load_data():
         with open(DATA_FILE, 'r') as f:
             data = json.load(f)
 
-            # Проверяем и добавляем отсутствующие ключи
+            # Восстанавливаем отсутствующие ключи
             for key in default_data:
                 if key not in data:
                     data[key] = default_data[key]
 
-            # Проверяем структуру restricted_users
+            # Восстанавливаем структуру restricted_users
             if 'restricted_users' not in data:
                 data['restricted_users'] = default_data['restricted_users']
             else:
@@ -112,13 +113,10 @@ def load_data():
 
             return data
 
-    except json.JSONDecodeError:
-        logger.error("Файл данных поврежден, создаем новый")
+    except Exception as e:
+        logger.error(f"Ошибка загрузки данных, создаем новый файл: {e}")
         with open(DATA_FILE, 'w') as f:
             json.dump(default_data, f, indent=4)
-        return default_data
-    except Exception as e:
-        logger.error(f"Ошибка загрузки данных: {e}")
         return default_data
 
 
@@ -157,7 +155,7 @@ def get_unban_keyboard(user_id):
 
 
 
-# Команда для ограничения пользователя
+# Команда для полного ограничения пользователя
 @dp.message_handler(Command("restrict"), AdminFilter())
 async def restrict_user(message: types.Message):
     try:
@@ -168,21 +166,22 @@ async def restrict_user(message: types.Message):
         target_user = message.reply_to_message.from_user
         data = load_data()
 
-        # Добавляем ограничения
-        data['restricted_users'][str(target_user.id)] = {
+        # Добавляем полное ограничение
+        data['restricted_users']['fully_restricted'][str(target_user.id)] = {
             'name': target_user.full_name,
             'restricted_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
         save_data(data)
 
-        await message.reply(f"✅ Пользователь {target_user.get_mention()} теперь ограничен",
-                            parse_mode='HTML')
+        await message.reply(
+            f"✅ Пользователь {target_user.get_mention()} теперь полностью ограничен",
+            parse_mode='HTML'
+        )
     except Exception as e:
         logger.error(f"Ошибка при ограничении пользователя: {e}")
-        await message.reply("❌ Произошла ошибка")
+        await message.reply("❌ Произошла ошибка при ограничении пользователя")
 
-
-# Команда для снятия ограничений
+# Команда для снятия всех ограничений
 @dp.message_handler(Command("unrestrict"), AdminFilter())
 async def unrestrict_user(message: types.Message):
     try:
@@ -191,32 +190,44 @@ async def unrestrict_user(message: types.Message):
             return
 
         target_user = message.reply_to_message.from_user
+        user_id = str(target_user.id)
         data = load_data()
+        restricted_users = data['restricted_users']
+        unrestricted = False
 
-        if str(target_user.id) in data['restricted_users']:
-            del data['restricted_users'][str(target_user.id)]
+        # Удаляем из всех категорий ограничений
+        for restriction_type in ['fully_restricted', 'no_links']:
+            if user_id in restricted_users[restriction_type]:
+                del restricted_users[restriction_type][user_id]
+                unrestricted = True
+
+        if unrestricted:
             save_data(data)
-            await message.reply(f"✅ Пользователь {target_user.get_mention()} больше не ограничен",
-                                parse_mode='HTML')
+            await message.reply(
+                f"✅ Пользователь {target_user.get_mention()} больше не ограничен",
+                parse_mode='HTML'
+            )
         else:
             await message.reply("ℹ️ Этот пользователь не был ограничен")
     except Exception as e:
         logger.error(f"Ошибка при снятии ограничений: {e}")
-        await message.reply("❌ Произошла ошибка")
+        await message.reply("❌ Произошла ошибка при снятии ограничений")
 
 
 @dp.message_handler(Command("restricted_list"), AdminFilter())
 async def list_restricted_users(message: types.Message):
     data = load_data()
-    if not data.get('restricted_users'):
+    restricted_users = data.get('restricted_users', {}).get('fully_restricted', {})
+
+    if not restricted_users:
         await message.reply("ℹ️ Нет ограниченных пользователей")
         return
 
     users_list = []
-    for user_id, user_data in data['restricted_users'].items():
-        users_list.append(
-            f"👤 {user_data['name']} (ID: {user_id}) - ограничен {user_data['restricted_at']}"
-        )
+    for user_id, user_data in restricted_users.items():
+        name = user_data.get('name', 'Неизвестный')
+        restricted_at = user_data.get('restricted_at', 'неизвестное время')
+        users_list.append(f"👤 {name} (ID: {user_id}) - ограничен {restricted_at}")
 
     await message.reply("📋 Ограниченные пользователи:\n\n" + "\n".join(users_list))
 
