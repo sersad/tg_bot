@@ -83,7 +83,8 @@ def init_data_file():
             "banned": {},
             "restricted_users": {
                 "no_links": {},
-                "fully_restricted": {}
+                "fully_restricted": {},
+                "no_forwards": {}  # Новая секция для хранения пользователей с запретом пересылки
             }
         }
         with open(data_file, 'w') as f:
@@ -93,13 +94,14 @@ def init_data_file():
 
 
 def load_data() -> dict:
-    """Загрузка данных из файла"""
+    """Загрузка данных из файла с гарантированным созданием всех ключей"""
     default_data = {
         "warnings": {},
         "banned": {},
         "restricted_users": {
             "no_links": {},
-            "fully_restricted": {}
+            "fully_restricted": {},
+            "no_forwards": {}  # Добавляем раздел для запрета пересылки
         }
     }
 
@@ -112,17 +114,15 @@ def load_data() -> dict:
         with open(DATA_FILE, 'r') as f:
             data = json.load(f)
 
-            # Восстановление структуры данных
+            # Гарантируем наличие всех ключей
             for key in default_data:
                 if key not in data:
                     data[key] = default_data[key]
 
-            if 'restricted_users' not in data:
-                data['restricted_users'] = default_data['restricted_users']
-            else:
-                for subkey in ['no_links', 'fully_restricted']:
-                    if subkey not in data['restricted_users']:
-                        data['restricted_users'][subkey] = {}
+            # Гарантируем структуру restricted_users
+            for subkey in default_data["restricted_users"]:
+                if subkey not in data["restricted_users"]:
+                    data["restricted_users"][subkey] = {}
 
             return data
 
@@ -138,6 +138,7 @@ def save_data(data: dict):
     try:
         with open(DATA_FILE, 'w') as f:
             json.dump(data, f, indent=4)
+            logger.info(f"Данные сохранены {data}")
     except Exception as e:
         logger.error(f"Ошибка сохранения данных: {e}")
 
@@ -331,6 +332,81 @@ async def show_link_restrictions(message: Message):
         await message.reply("❌ Произошла ошибка при получении списка ограничений")
 
 
+@dp.message(Command("ban_forwards"), AdminFilter())
+async def ban_forwards_for_user(message: Message):
+    """Запрет пересылки сообщений для пользователя"""
+    try:
+        if not message.reply_to_message:
+            await message.reply("ℹ️ Ответьте на сообщение пользователя")
+            return
+
+        user = message.reply_to_message.from_user
+        data = load_data()
+
+        data['restricted_users']['no_forwards'][str(user.id)] = {
+            'name': user.full_name,
+            'banned_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        save_data(data)
+        logger.info(f"User {user.id} banned for forwards")
+
+        await message.reply(
+            f"🚫 Пользователю {user.mention_html()} запрещена пересылка сообщений",
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при запрете пересылки: {e}")
+        await message.reply("❌ Произошла ошибка при запрете пересылки")
+
+@dp.message(Command("allow_forwards"), AdminFilter())
+async def allow_forwards_for_user(message: Message):
+    """Разрешение пересылки сообщений для пользователя"""
+    try:
+        if not message.reply_to_message:
+            await message.reply("ℹ️ Ответьте на сообщение пользователя")
+            return
+
+        user = message.reply_to_message.from_user
+        user_id = str(user.id)
+        data = load_data()
+
+        if user_id in data['restricted_users']['no_forwards']:
+            del data['restricted_users']['no_forwards'][user_id]
+            save_data(data)
+            await message.reply(
+                f"🆗 Пользователю {user.mention_html()} разрешена пересылка сообщений",
+                parse_mode='HTML'
+            )
+        else:
+            await message.reply("ℹ️ Этому пользователю не был запрещена пересылка")
+    except Exception as e:
+        logger.error(f"Ошибка при разрешении пересылки: {e}")
+        await message.reply("❌ Произошла ошибка при разрешении пересылки")
+
+@dp.message(Command("forward_restrictions"), AdminFilter())
+async def show_forward_restrictions(message: Message):
+    """Показать пользователей с запретом пересылки"""
+    try:
+        data = load_data()
+        restricted = data['restricted_users']['no_forwards']
+
+        if not restricted:
+            await message.reply("ℹ️ Нет пользователей с запретом на пересылку")
+            return
+
+        users_list = [
+            f"• {info['name']} (ID: {uid}) - с {info['banned_at']}"
+            for uid, info in restricted.items()
+        ]
+
+        await message.reply(
+            "📋 Пользователи с запретом на пересылку:\n\n" + "\n".join(users_list)
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при показе ограничений: {e}")
+        await message.reply("❌ Произошла ошибка при получении списка ограничений")
+
+
 # ======================
 # ОБРАБОТКА СООБЩЕНИЙ
 # ======================
@@ -357,15 +433,20 @@ async def show_admin_help(message: Message):
 <code>/unrestrict</code> - Снять ограничения (ответьте на сообщение)
 <code>/ban_links</code> - Запретить ссылки (ответьте на сообщение)
 <code>/allow_links</code> - Разрешить ссылки (ответьте на сообщение)
+<code>/ban_forwards</code> - Запретить пересылку (ответьте на сообщение)
+<code>/allow_forwards</code> - Разрешить пересылку (ответьте на сообщение)
 <code>/restricted_list</code> - Список ограниченных
 <code>/link_restrictions</code> - Кто не может отправлять ссылки
+<code>/forward_restrictions</code> - Кто не может пересылать
 
 <b>Автоматические ограничения:</b>
-• Удаление ссылок на vk.com/clip vk.com/video
+• Удаление ссылок на <code>vk.com/clip vk.com/video</code>
 • Блокировка голосовых/видеосообщений
 • Система предупреждений (3 = бан) на 3 минуты
 """
     await message.answer(help_text, parse_mode="HTML")
+    await asyncio.sleep(60)
+    await message.delete()
 
 
 async def show_user_help(message: Message):
@@ -380,6 +461,8 @@ async def show_user_help(message: Message):
 /help - показать эту справку
 """
     await message.answer(help_text, parse_mode="HTML")
+    await asyncio.sleep(60)
+    await message.delete()
 
 
 @dp.message(
@@ -421,7 +504,7 @@ async def handle_video_note(message: Message):
         logger.error(f"Ошибка обработки видеосообщения: {e}")
         await message.reply("⚠️ Ошибка обработки видеосообщения")
 
-
+# Модифицируем обработчик пересланных сообщений
 @dp.message(
     F.chat.type.in_({ChatType.SUPERGROUP, ChatType.GROUP}),
     F.forward_from_chat,
@@ -430,6 +513,19 @@ async def handle_video_note(message: Message):
 async def handle_channel_forward(message: Message):
     """Обработка пересланных сообщений из каналов"""
     try:
+        user_id = str(message.from_user.id)
+        data = load_data()
+
+        # Проверка, запрещена ли пересылка для этого пользователя
+        if user_id in data['restricted_users']['no_forwards']:
+            await message.delete()
+            await message.answer(
+                f"⛔ {message.from_user.mention_html()}, вам запрещена пересылка сообщений",
+                parse_mode='HTML'
+            )
+            return
+
+        # Остальная логика обработки пересылок (если нужно)
         channel = message.forward_from_chat
         logger.info(f"Переслано из канала: {channel.title} [ID:{channel.id}]")
 
@@ -439,8 +535,8 @@ async def handle_channel_forward(message: Message):
             await handle_rule_break(
                 message=message,
                 reason=f"пересылка из канала {channel.title}",
-                data=load_data(),
-                user_id=str(message.from_user.id),
+                data=data,
+                user_id=user_id,
                 chat_id=message.chat.id
             )
     except Exception as e:
