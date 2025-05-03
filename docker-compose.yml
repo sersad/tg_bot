@@ -6,7 +6,7 @@ services:
     container_name: moderation_bot
     restart: unless-stopped
     volumes:
-      - ./data:/app/data  # Монтируем всю папку
+      - ./moderation_data.json:/app/moderation_data.json:rw
       - ./moderation.log:/app/moderation.log
     env_file:
       - .env  # Используем отдельный файл с переменными окружения

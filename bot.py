@@ -39,7 +39,8 @@ logger = logging.getLogger(__name__)
 # Конфигурация бота
 API_TOKEN = os.getenv('BOT_TOKEN')
 MAX_WARNINGS = int(os.getenv('MAX_WARNINGS', 3))
-BAN_DURATION = int(os.getenv('BAN_DURATION', 15))
+BAN_DURATION = int(os.getenv('BAN_DURATION', 3))
+AUTO_REMOVE = int(os.getenv('AUTO_REMOVE', 30))
 BANNED_PHRASES = os.getenv('BANNED_PHRASES', 'vk.com,vk.ru,vkontakte.ru').split(',')
 ADMIN_CHAT_ID = int(os.getenv('ADMIN_CHAT_ID', 0))
 
@@ -72,8 +73,8 @@ class AdminFilter(BaseFilter):
 
 def init_data_file():
     """Инициализация файла данных"""
-    data_dir = '/app/data'
-    data_file = os.path.join(data_dir, 'moderation_data.json')
+    data_dir = '/app'
+    data_file = os.path.join(data_dir, DATA_FILE)
 
     os.makedirs(data_dir, exist_ok=True)
 
@@ -101,7 +102,7 @@ def load_data() -> dict:
         "restricted_users": {
             "no_links": {},
             "fully_restricted": {},
-            "no_forwards": {}  # Добавляем раздел для запрета пересылки
+            "no_forwards": {}
         }
     }
 
@@ -138,7 +139,7 @@ def save_data(data: dict):
     try:
         with open(DATA_FILE, 'w') as f:
             json.dump(data, f, indent=4)
-            logger.info(f"Данные сохранены {data}")
+            # logger.info(f"Данные сохранены {data}")
     except Exception as e:
         logger.error(f"Ошибка сохранения данных: {e}")
 
@@ -186,6 +187,8 @@ async def restrict_user(message: Message):
     try:
         if not message.reply_to_message:
             await message.reply("ℹ️ Ответьте на сообщение пользователя, которого хотите ограничить")
+            await asyncio.sleep(AUTO_REMOVE)
+            await message.delete()
             return
 
         target_user = message.reply_to_message.from_user
@@ -201,9 +204,12 @@ async def restrict_user(message: Message):
             f"✅ Пользователь {target_user.mention_html()} теперь полностью ограничен",
             parse_mode='HTML'
         )
+
     except Exception as e:
         logger.error(f"Ошибка при ограничении пользователя: {e}")
         await message.reply("❌ Произошла ошибка при ограничении пользователя")
+        await asyncio.sleep(AUTO_REMOVE)
+        await message.delete()
 
 
 @dp.message(Command("unrestrict"), AdminFilter())
@@ -212,6 +218,8 @@ async def unrestrict_user(message: Message):
     try:
         if not message.reply_to_message:
             await message.reply("ℹ️ Ответьте на сообщение пользователя, которого хотите разограничить")
+            await asyncio.sleep(AUTO_REMOVE)
+            await message.delete()
             return
 
         target_user = message.reply_to_message.from_user
@@ -232,9 +240,13 @@ async def unrestrict_user(message: Message):
             )
         else:
             await message.reply("ℹ️ Этот пользователь не был ограничен")
+            await asyncio.sleep(AUTO_REMOVE)
+            await message.delete()
     except Exception as e:
         logger.error(f"Ошибка при снятии ограничений: {e}")
         await message.reply("❌ Произошла ошибка при снятии ограничений")
+        await asyncio.sleep(AUTO_REMOVE)
+        await message.delete()
 
 
 @dp.message(Command("restricted_list"), AdminFilter())
@@ -245,6 +257,8 @@ async def list_restricted_users(message: Message):
 
     if not restricted_users:
         await message.reply("ℹ️ Нет ограниченных пользователей")
+        await asyncio.sleep(AUTO_REMOVE)
+        await message.delete()
         return
 
     users_list = []
@@ -254,6 +268,8 @@ async def list_restricted_users(message: Message):
         users_list.append(f"👤 {name} (ID: {user_id}) - ограничен {restricted_at}")
 
     await message.reply("📋 Ограниченные пользователи:\n\n" + "\n".join(users_list))
+    await asyncio.sleep(AUTO_REMOVE)
+    await message.delete()
 
 
 @dp.message(Command("ban_links"), AdminFilter())
@@ -262,6 +278,8 @@ async def ban_links_for_user(message: Message):
     try:
         if not message.reply_to_message:
             await message.reply("ℹ️ Ответьте на сообщение пользователя")
+            await asyncio.sleep(AUTO_REMOVE)
+            await message.delete()
             return
 
         user = message.reply_to_message.from_user
@@ -280,6 +298,8 @@ async def ban_links_for_user(message: Message):
     except Exception as e:
         logger.error(f"Ошибка при запрете ссылок: {e}")
         await message.reply("❌ Произошла ошибка при запрете ссылок")
+        await asyncio.sleep(AUTO_REMOVE)
+        await message.delete()
 
 
 @dp.message(Command("allow_links"), AdminFilter())
@@ -288,6 +308,8 @@ async def allow_links_for_user(message: Message):
     try:
         if not message.reply_to_message:
             await message.reply("ℹ️ Ответьте на сообщение пользователя")
+            await asyncio.sleep(AUTO_REMOVE)
+            await message.delete()
             return
 
         user = message.reply_to_message.from_user
@@ -303,9 +325,13 @@ async def allow_links_for_user(message: Message):
             )
         else:
             await message.reply("ℹ️ Этому пользователю не был запрещён отправка ссылок")
+            await asyncio.sleep(AUTO_REMOVE)
+            await message.delete()
     except Exception as e:
         logger.error(f"Ошибка при разрешении ссылок: {e}")
         await message.reply("❌ Произошла ошибка при разрешении ссылок")
+        await asyncio.sleep(AUTO_REMOVE)
+        await message.delete()
 
 
 @dp.message(Command("link_restrictions"), AdminFilter())
@@ -317,6 +343,8 @@ async def show_link_restrictions(message: Message):
 
         if not restricted:
             await message.reply("ℹ️ Нет пользователей с запретом на ссылки")
+            await asyncio.sleep(AUTO_REMOVE)
+            await message.delete()
             return
 
         users_list = [
@@ -327,9 +355,13 @@ async def show_link_restrictions(message: Message):
         await message.reply(
             "📋 Пользователи с запретом на ссылки:\n\n" + "\n".join(users_list)
         )
+        await asyncio.sleep(AUTO_REMOVE)
+        await message.delete()
     except Exception as e:
         logger.error(f"Ошибка при показе ограничений: {e}")
         await message.reply("❌ Произошла ошибка при получении списка ограничений")
+        await asyncio.sleep(AUTO_REMOVE)
+        await message.delete()
 
 
 @dp.message(Command("ban_forwards"), AdminFilter())
@@ -338,6 +370,8 @@ async def ban_forwards_for_user(message: Message):
     try:
         if not message.reply_to_message:
             await message.reply("ℹ️ Ответьте на сообщение пользователя")
+            await asyncio.sleep(AUTO_REMOVE)
+            await message.delete()
             return
 
         user = message.reply_to_message.from_user
@@ -357,6 +391,9 @@ async def ban_forwards_for_user(message: Message):
     except Exception as e:
         logger.error(f"Ошибка при запрете пересылки: {e}")
         await message.reply("❌ Произошла ошибка при запрете пересылки")
+        await asyncio.sleep(AUTO_REMOVE)
+        await message.delete()
+
 
 @dp.message(Command("allow_forwards"), AdminFilter())
 async def allow_forwards_for_user(message: Message):
@@ -364,6 +401,8 @@ async def allow_forwards_for_user(message: Message):
     try:
         if not message.reply_to_message:
             await message.reply("ℹ️ Ответьте на сообщение пользователя")
+            await asyncio.sleep(AUTO_REMOVE)
+            await message.delete()
             return
 
         user = message.reply_to_message.from_user
@@ -379,19 +418,27 @@ async def allow_forwards_for_user(message: Message):
             )
         else:
             await message.reply("ℹ️ Этому пользователю не был запрещена пересылка")
+            await asyncio.sleep(AUTO_REMOVE)
+            await message.delete()
     except Exception as e:
         logger.error(f"Ошибка при разрешении пересылки: {e}")
         await message.reply("❌ Произошла ошибка при разрешении пересылки")
+        await asyncio.sleep(AUTO_REMOVE)
+        await message.delete()
+
 
 @dp.message(Command("forward_restrictions"), AdminFilter())
 async def show_forward_restrictions(message: Message):
-    """Показать пользователей с запретом пересылки"""
+    """Показать пользователей с запретом пересылки с автоматическим удалением"""
     try:
         data = load_data()
         restricted = data['restricted_users']['no_forwards']
 
         if not restricted:
-            await message.reply("ℹ️ Нет пользователей с запретом на пересылку")
+            reply_msg = await message.reply("ℹ️ Нет пользователей с запретом на пересылку")
+
+            await asyncio.sleep(AUTO_REMOVE)
+            await reply_msg.delete()
             return
 
         users_list = [
@@ -399,12 +446,18 @@ async def show_forward_restrictions(message: Message):
             for uid, info in restricted.items()
         ]
 
-        await message.reply(
+        reply_msg = await message.reply(
             "📋 Пользователи с запретом на пересылку:\n\n" + "\n".join(users_list)
         )
+        # Удаляем сообщение
+        await asyncio.sleep(AUTO_REMOVE)
+        await reply_msg.delete()
+
     except Exception as e:
-        logger.error(f"Ошибка при показе ограничений: {e}")
-        await message.reply("❌ Произошла ошибка при получении списка ограничений")
+        logger.error(f"Ошибка при показе ограничений: {e}", exc_info=True)
+        error_msg = await message.reply("❌ Произошла ошибка при получении списка ограничений")
+        await asyncio.sleep(AUTO_REMOVE)
+        await error_msg.delete()
 
 
 # ======================
@@ -422,6 +475,8 @@ async def handle_help(message: Message):
     except Exception as e:
         logger.error(f"Ошибка в обработчике help: {e}")
         await message.reply("⚠️ Произошла ошибка при обработке команды")
+        await asyncio.sleep(AUTO_REMOVE)
+        await message.delete()
 
 
 async def show_admin_help(message: Message):
@@ -437,7 +492,7 @@ async def show_admin_help(message: Message):
 <code>/allow_forwards</code> - Разрешить пересылку (ответьте на сообщение)
 <code>/restricted_list</code> - Список ограниченных
 <code>/link_restrictions</code> - Кто не может отправлять ссылки
-<code>/forward_restrictions</code> - Кто не может пересылать
+<code>/forward_restrictions</code> - Кто не может пересылать сообщения с каналов
 
 <b>Автоматические ограничения:</b>
 • Удаление ссылок на <code>vk.com/clip vk.com/video</code>
@@ -445,7 +500,7 @@ async def show_admin_help(message: Message):
 • Система предупреждений (3 = бан) на 3 минуты
 """
     await message.answer(help_text, parse_mode="HTML")
-    await asyncio.sleep(60)
+    await asyncio.sleep(AUTO_REMOVE)
     await message.delete()
 
 
@@ -461,7 +516,7 @@ async def show_user_help(message: Message):
 /help - показать эту справку
 """
     await message.answer(help_text, parse_mode="HTML")
-    await asyncio.sleep(60)
+    await asyncio.sleep(AUTO_REMOVE)
     await message.delete()
 
 
@@ -503,6 +558,8 @@ async def handle_video_note(message: Message):
     except Exception as e:
         logger.error(f"Ошибка обработки видеосообщения: {e}")
         await message.reply("⚠️ Ошибка обработки видеосообщения")
+        await asyncio.sleep(AUTO_REMOVE)
+        await message.delete()
 
 # Модифицируем обработчик пересланных сообщений
 @dp.message(
@@ -523,6 +580,8 @@ async def handle_channel_forward(message: Message):
                 f"⛔ {message.from_user.mention_html()}, вам запрещена пересылка сообщений",
                 parse_mode='HTML'
             )
+            await asyncio.sleep(AUTO_REMOVE)
+            await message.delete()
             return
 
         # Остальная логика обработки пересылок (если нужно)
@@ -542,6 +601,8 @@ async def handle_channel_forward(message: Message):
     except Exception as e:
         logger.error(f"Ошибка обработки пересланного сообщения: {e}")
         await message.reply("⚠️ Ошибка обработки пересланного сообщения")
+        await asyncio.sleep(AUTO_REMOVE)
+        await message.delete()
 
 
 @dp.message(
@@ -567,6 +628,8 @@ async def check_regular_message(message: Message):
                 f"⛔ {message.from_user.mention_html()}, ваши сообщения ограничены",
                 parse_mode='HTML'
             )
+            await asyncio.sleep(AUTO_REMOVE)
+            await message.delete()
             return
 
         # Проверка запрета ссылок
@@ -577,6 +640,8 @@ async def check_regular_message(message: Message):
                     f"⛔ {message.from_user.mention_html()}, вам запрещены ссылки",
                     parse_mode='HTML'
                 )
+                await asyncio.sleep(AUTO_REMOVE)
+                await message.delete()
                 return
 
         # Проверка текста на запрещенные фразы
@@ -684,8 +749,8 @@ async def handle_rule_break(message: Message, reason: str, data: dict, user_id: 
                 parse_mode='HTML'
             )
 
-            # Удаление уведомления через 1 минуту
-            await asyncio.sleep(180)
+            # Удаление уведомления через BAN_DURATION
+            await asyncio.sleep(int(BAN_DURATION) * 60)
             await warning_msg.delete()
         else:
             # Обычное предупреждение
@@ -696,7 +761,7 @@ async def handle_rule_break(message: Message, reason: str, data: dict, user_id: 
             )
 
             # Удаление уведомления через 10 секунд
-            await asyncio.sleep(180)
+            await asyncio.sleep(int(BAN_DURATION) * 60)
             await warning_msg.delete()
 
     except Exception as e:
@@ -766,7 +831,6 @@ async def on_startup():
         )
     except Exception as e:
         logger.error(f"Ошибка отправки уведомления о запуске: {e}")
-
 
 
 
