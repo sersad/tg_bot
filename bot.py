@@ -1,7 +1,7 @@
 import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ChatType, ContentType
-from aiogram.filters import Command
+from aiogram.filters import Command, BaseFilter
 from aiogram.types import (
     Message,
     CallbackQuery,
@@ -15,6 +15,12 @@ import json
 import os
 import asyncio
 from dotenv import load_dotenv
+
+from aiogram import Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.client.default import DefaultBotProperties
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -53,13 +59,12 @@ dp = Dispatcher(storage=storage)
 DATA_FILE = 'moderation_data.json'
 
 
-class AdminFilter:
-    """Фильтр для проверки администратора"""
+class AdminFilter(BaseFilter):
+    """Фильтр для проверки администратора в aiogram v3.x"""
 
     async def __call__(self, message: Message, bot: Bot) -> bool:
         try:
-            member = await bot.get_chat_member(message.chat.id, message.from_user.id)
-            return member.is_chat_admin()
+            return await is_admin(message.chat.id, message.from_user.id, bot)
         except Exception as e:
             logger.error(f"Ошибка проверки администратора: {e}")
             return False
@@ -137,6 +142,7 @@ def save_data(data: dict):
         logger.error(f"Ошибка сохранения данных: {e}")
 
 
+
 def log_deleted_message(user_id: str, user_name: str, message_text: str, reason: str):
     """Логирование удаленных сообщений"""
     log_entry = {
@@ -153,10 +159,11 @@ async def is_admin(chat_id: int, user_id: int, bot: Bot) -> bool:
     """Проверка, является ли пользователь администратором"""
     try:
         member = await bot.get_chat_member(chat_id, user_id)
-        return member.is_chat_admin()
+        return member.status in ["administrator", "creator"]
     except Exception as e:
         logger.error(f"Ошибка проверки администратора: {e}")
         return False
+
 
 
 def get_unban_keyboard(user_id: str) -> InlineKeyboardMarkup:
@@ -582,7 +589,7 @@ async def handle_rule_break(message: Message, reason: str, data: dict, user_id: 
             )
 
             # Удаление уведомления через 1 минуту
-            await asyncio.sleep(60)
+            await asyncio.sleep(180)
             await warning_msg.delete()
         else:
             # Обычное предупреждение
@@ -593,7 +600,7 @@ async def handle_rule_break(message: Message, reason: str, data: dict, user_id: 
             )
 
             # Удаление уведомления через 10 секунд
-            await asyncio.sleep(10)
+            await asyncio.sleep(180)
             await warning_msg.delete()
 
     except Exception as e:
@@ -665,13 +672,18 @@ async def on_startup():
         logger.error(f"Ошибка отправки уведомления о запуске: {e}")
 
 
-if __name__ == '__main__':
-    from aiogram import executor
 
-    # Регистрация обработчиков
+
+async def main():
     dp.startup.register(on_startup)
+    await dp.start_polling(bot)
 
+
+if __name__ == "__main__":
+    import asyncio
     try:
-        executor.start_polling(dp, skip_updates=True)
+        asyncio.run(main())
     except Exception as e:
         logger.error(f"Ошибка запуска бота: {e}")
+
+
