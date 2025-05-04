@@ -659,9 +659,11 @@ async def show_admin_help(message: Message):
 <code>/allow_links</code> - Разрешить ссылки (ответьте на сообщение)
 <code>/ban_forwards</code> - Запретить пересылку (ответьте на сообщение)
 <code>/allow_forwards</code> - Разрешить пересылку (ответьте на сообщение)
+<code>/userstats</code> - Статистика пользователя (ответьте на сообщение) 
 <code>/restricted_list</code> - Список ограниченных
 <code>/link_restrictions</code> - Кто не может отправлять ссылки
 <code>/forward_restrictions</code> - Кто не может пересылать сообщения с каналов
+
 
 <b>Автоматические ограничения:</b>
 • Удаление ссылок на <code>{BANNED_PHRASES}</code>
