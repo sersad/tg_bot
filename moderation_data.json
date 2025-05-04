@@ -1,20 +1,17 @@
 {
     "warnings": {
-        "233745750": 1
+        "233745750": 2,
+        "6585252422": 1
     },
     "banned": {},
     "restricted_users": {
         "no_links": {},
         "fully_restricted": {},
-        "no_forwards": {
-            "5653011096": {
-                "name": "\u0421\u0435\u0440\u0433\u0435\u0439",
-                "banned_at": "2025-05-03 20:11:31"
-            },
-            "6585252422": {
-                "name": "\u0421\u0432\u044f\u0442\u043e\u0441\u043b\u0430\u0432 \u0412\u0435\u0441\u0435\u043b\u0438\u043d",
-                "banned_at": "2025-05-03 20:36:59"
-            }
-        }
+        "no_forwards": {}
+    },
+    "user_stats": {},
+    "parsing_state": {
+        "last_parsed_date": null,
+        "last_parsed_id": null
     }
 }
