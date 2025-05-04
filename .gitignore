@@ -2,3 +2,5 @@
 .idea/
 data/moderation_data.json
 *.log
+*.json
+

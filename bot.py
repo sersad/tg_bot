@@ -2,12 +2,15 @@ import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ChatType, ContentType
 from aiogram.filters import Command, BaseFilter
+
 from aiogram.types import (
     Message,
     CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    ChatPermissions
+    ChatPermissions,
+    InputFile,
+    BufferedInputFile
 )
 from aiogram.fsm.storage.memory import MemoryStorage
 from datetime import datetime, timedelta
@@ -21,9 +24,13 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
-from matplotlib import pyplot as plt
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime
 import io
-import asyncio
+
+
+
 from collections import defaultdict
 
 # Загрузка переменных окружения
@@ -64,11 +71,9 @@ dp = Dispatcher(storage=storage)
 # Файл для хранения данных
 DATA_FILE = 'moderation_data.json'
 
-# Глобальная переменная для хранения состояния парсинга
-parsing_state = {
-    'last_parsed_date': None,
-    'is_parsing': False
-}
+# Константы
+STATS_FILE = 'user_stats.json'
+
 
 class AdminFilter(BaseFilter):
     """Фильтр для проверки администратора в aiogram v3.x"""
@@ -96,11 +101,6 @@ def init_data_file():
                 "no_links": {},
                 "fully_restricted": {},
                 "no_forwards": {}
-            },
-            "user_stats": {},  # Новая секция для хранения статистики пользователей
-            "parsing_state": {  # Состояние парсинга чата
-                "last_parsed_date": None,
-                "last_parsed_id": None
             }
         }
         with open(data_file, 'w') as f:
@@ -118,11 +118,6 @@ def load_data() -> dict:
             "no_links": {},
             "fully_restricted": {},
             "no_forwards": {}
-        },
-        "user_stats": {},
-        "parsing_state": {
-            "last_parsed_date": None,
-            "last_parsed_id": None
         }
     }
 
@@ -144,17 +139,6 @@ def load_data() -> dict:
                 if subkey not in data["restricted_users"]:
                     data["restricted_users"][subkey] = {}
 
-            # Гарантируем структуру user_stats
-            if not isinstance(data.get("user_stats"), dict):
-                data["user_stats"] = default_data["user_stats"]
-
-            # Гарантируем структуру parsing_state
-            if not isinstance(data.get("parsing_state"), dict):
-                data["parsing_state"] = default_data["parsing_state"]
-            for subkey in default_data["parsing_state"]:
-                if subkey not in data["parsing_state"]:
-                    data["parsing_state"][subkey] = None
-
             return data
 
     except Exception as e:
@@ -171,6 +155,41 @@ def save_data(data: dict):
             # logger.info(f"Данные сохранены {data}")
     except Exception as e:
         logger.error(f"Ошибка сохранения данных: {e}")
+
+
+def init_stats_file():
+    """Инициализация файла статистики"""
+    data_dir = '/app'
+    stats_file = os.path.join(data_dir, STATS_FILE)
+
+    if not os.path.exists(stats_file):
+        with open(STATS_FILE, 'w') as f:
+            json.dump({}, f)
+        os.chmod(STATS_FILE, 0o666)
+        logger.info("Создан новый файл статистики")
+
+
+def load_stats() -> dict:
+    """Загрузка статистики из файла"""
+    try:
+        if not os.path.exists(STATS_FILE):
+            init_stats_file()
+            return {}
+
+        with open(STATS_FILE, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Ошибка загрузки статистики: {e}")
+        return {}
+
+
+def save_stats(data: dict):
+    """Сохранение статистики в файл"""
+    try:
+        with open(STATS_FILE, 'w') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения статистики: {e}")
 
 
 def log_deleted_message(user_id: str, user_name: str, message_text: str, reason: str):
@@ -204,95 +223,134 @@ def get_unban_keyboard(user_id: str) -> InlineKeyboardMarkup:
     )
 
 
-async def incremental_chat_parse(chat_id: int):
-    """Инкрементальный парсинг чата с сохранением прогресса"""
-    if parsing_state['is_parsing']:
-        return False
+def generate_activity_plot(user_data: dict, user_name: str) -> tuple[io.BytesIO, str]:
+    """Генерация графика активности с улучшенным дизайном
 
-    parsing_state['is_parsing'] = True
-    data = load_data()
-
+    Возвращает:
+        BytesIO: Буфер с изображением графика
+        str: Путь к сохранённому файлу
+    """
+    """Генерация графика активности с современным стилем"""
     try:
-        # Настройки парсинга
-        limit = 1000  # Лимит сообщений за один проход
-        offset_date = parsing_state.get('last_parsed_date')
+        # Подготовка данных
+        dates = []
+        counts = []
 
-        # Собираем статистику
-        user_stats = defaultdict(lambda: {
-            'count': 0,
-            'daily_activity': defaultdict(int),
-            'last_message': None
-        })
+        sorted_activity = sorted(
+            [(date, count) for date, count in user_data['activity'].items()],
+            key=lambda x: x[0]
+        )[-30:]
 
-        async for msg in bot.get_chat_history(chat_id, limit=limit, offset_date=offset_date):
-            if not msg.from_user:
-                continue
+        for date_str, count in sorted_activity:
+            dates.append(date_str)
+            counts.append(count)
 
-            user_id = str(msg.from_user.id)
-            msg_date = msg.date.date()
+        # Используем современный стиль вместо 'seaborn'
+        plt.style.use('seaborn-v0_8')  # Или другой доступный стиль
 
-            user_stats[user_id]['count'] += 1
-            user_stats[user_id]['daily_activity'][msg_date] += 1
-            user_stats[user_id]['last_message'] = msg.date
+        fig, ax = plt.subplots(figsize=(12, 6))
 
-            # Обновляем последнюю дату парсинга
-            if not offset_date or msg.date < offset_date:
-                offset_date = msg.date
+        # Основной график
+        bars = ax.bar(
+            dates, counts,
+            color='#4CAF50',
+            edgecolor='darkgreen',
+            linewidth=0.7,
+            alpha=0.8
+        )
 
-        # Сохраняем результаты
-        for user_id, stats in user_stats.items():
-            if user_id not in data['user_stats']:
-                data['user_stats'][user_id] = {
-                    'total_messages': 0,
-                    'activity': {}
-                }
+        # Линия тренда
+        if len(counts) > 1:
+            z = np.polyfit(range(len(counts)), counts, 1)
+            p = np.poly1d(z)
+            ax.plot(
+                dates, p(range(len(counts))),
+                color='#FF5722',
+                linestyle='--',
+                linewidth=2,
+                label='Тренд'
+            )
 
-            data['user_stats'][user_id]['total_messages'] += stats['count']
+        # Настройки графика
+        ax.set_title(
+            f'Активность пользователя {user_name}\nза последние {len(dates)} дней',
+            fontsize=14,
+            pad=20
+        )
+        ax.set_xlabel('Дата', fontsize=12)
+        ax.set_ylabel('Количество сообщений', fontsize=12)
+        ax.grid(axis='y', linestyle='--', alpha=0.7)
 
-            for date, count in stats['daily_activity'].items():
-                date_str = date.strftime('%Y-%m-%d')
-                data['user_stats'][user_id]['activity'][date_str] = \
-                    data['user_stats'][user_id]['activity'].get(date_str, 0) + count
+        # Поворот дат на 45 градусов
+        plt.xticks(rotation=45, ha='right')
 
-        parsing_state['last_parsed_date'] = offset_date
-        save_data(data)
-        return True
+        # Добавляем значения над столбцами
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(
+                bar.get_x() + bar.get_width() / 2., height,
+                f'{int(height)}',
+                ha='center', va='bottom',
+                fontsize=9
+            )
+
+        # Легенда если есть тренд
+        if len(counts) > 1:
+            ax.legend()
+
+        plt.tight_layout()
+
+        # Сохраняем в буфер
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+        buf.seek(0)
+
+        # Дополнительно сохраняем в файл
+        plot_filename = f"user_activity_{user_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}.png"
+        plot_path = os.path.join('tmp', plot_filename)
+
+        os.makedirs('tmp', exist_ok=True)
+        plt.savefig(plot_path, format='png', dpi=100, bbox_inches='tight')
+
+        plt.close()
+
+        return buf, plot_path
 
     except Exception as e:
-        logger.error(f"Ошибка парсинга: {e}")
-        return False
-    finally:
-        parsing_state['is_parsing'] = False
+        logger.error(f"Ошибка генерации графика: {e}", exc_info=True)
+        raise
 
 
-def generate_activity_plot(user_data: dict):
-    """Генерация графика активности"""
-    dates = []
-    counts = []
+async def track_new_messages(message: types.Message):
+    """Трекинг новых сообщений в реальном времени"""
+    try:
+        user_id = str(message.from_user.id)
+        msg_date = message.date.date()
+        date_str = msg_date.strftime('%Y-%m-%d')
 
-    # Сортируем данные по дате
-    sorted_dates = sorted(user_data['activity'].items(), key=lambda x: x[0])
+        stats_data = load_stats()
 
-    for date_str, count in sorted_dates[-30:]:  # Последние 30 дней
-        dates.append(date_str)
-        counts.append(count)
+        # Инициализируем структуру при необходимости
+        if user_id not in stats_data:
+            stats_data[user_id] = {
+                'total_messages': 0,
+                'activity': {},
+                'username': message.from_user.username,
+                'full_name': message.from_user.full_name,
+                'first_seen': date_str,
+                'last_active': date_str
+            }
 
-    # Создаем график
-    plt.figure(figsize=(10, 5))
-    plt.bar(dates, counts, color='skyblue')
-    plt.title('Активность за последние 30 дней')
-    plt.xlabel('Дата')
-    plt.ylabel('Сообщений')
-    plt.xticks(rotation=45)
-    plt.tight_layout()
+        # Обновляем статистику
+        stats_data[user_id]['total_messages'] += 1
+        stats_data[user_id]['activity'][date_str] = stats_data[user_id]['activity'].get(date_str, 0) + 1
+        stats_data[user_id]['last_active'] = date_str
 
-    # Конвертируем в изображение
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png')
-    buf.seek(0)
-    plt.close()
+        save_stats(stats_data)
 
-    return buf
+    except Exception as e:
+        logger.error(f"Ошибка трекинга сообщения: {e}")
+
 
 # ======================
 # КОМАНДЫ АДМИНИСТРАТОРА
@@ -544,7 +602,6 @@ async def allow_forwards_for_user(message: Message):
         await error_msg.delete()
 
 
-
 @dp.message(Command("forward_restrictions"), AdminFilter())
 async def show_forward_restrictions(message: Message):
     """Показать пользователей с запретом пересылки с автоматическим удалением"""
@@ -578,59 +635,6 @@ async def show_forward_restrictions(message: Message):
         await error_msg.delete()
 
 
-@dp.message(Command("fullstats"), AdminFilter())
-async def show_full_user_stats(message: Message):
-    """Полная статистика с графиком активности"""
-    try:
-        if not message.reply_to_message:
-            await message.reply("ℹ️ Ответьте на сообщение пользователя")
-            return
-
-        # Запускаем фоновый парсинг
-        asyncio.create_task(incremental_chat_parse(message.chat.id))
-
-        target_user = message.reply_to_message.from_user
-        user_id = str(target_user.id)
-        data = load_data()
-
-        # Получаем статистику
-        user_stats = data['user_stats'].get(user_id, {})
-        warnings = data['warnings'].get(user_id, 0)
-
-        # Формируем текстовую часть
-        stats_text = (
-            f"📊 <b>Полная статистика</b> {target_user.mention_html()}:\n\n"
-            f"🆔 ID: <code>{user_id}</code>\n"
-            f"👤 Имя: {target_user.full_name}\n"
-            f"✉️ Всего сообщений: <b>{user_stats.get('total_messages', 0)}</b>\n"
-            f"⚠️ Предупреждений: <b>{warnings}/{MAX_WARNINGS}</b>\n\n"
-            f"📈 <i>График активности ниже...</i>"
-        )
-
-        # Отправляем текстовую часть
-        await message.reply(stats_text, parse_mode="HTML")
-
-        # Генерируем и отправляем график если есть данные
-        if user_stats.get('activity'):
-            plot_buf = generate_activity_plot(user_stats)
-            await message.answer_photo(plot_buf, caption="📊 Активность за последние 30 дней")
-
-    except Exception as e:
-        logger.error(f"Ошибка статистики: {e}", exc_info=True)
-        await message.reply("❌ Ошибка формирования статистики")
-
-
-# Фоновая задача для периодического парсинга
-async def scheduled_parsing(CHAT_ID):
-    while True:
-        await asyncio.sleep(3600)  # Каждый час
-        await incremental_chat_parse(CHAT_ID)  # Укажите ID вашего чата
-
-
-# ======================
-# ОБРАБОТКА СООБЩЕНИЙ
-# ======================
-
 @dp.message(Command("help"))
 async def handle_help(message: Message):
     """Обработчик команды /help"""
@@ -644,6 +648,7 @@ async def handle_help(message: Message):
         error_msg = await message.reply("⚠️ Произошла ошибка при обработке команды")
         await asyncio.sleep(AUTO_REMOVE)
         await error_msg.delete()
+
 
 async def show_admin_help(message: Message):
     """Справка для администраторов"""
@@ -685,6 +690,111 @@ async def show_user_help(message: Message):
     reply_msg = await message.answer(help_text, parse_mode="HTML")
     await asyncio.sleep(AUTO_REMOVE)
     await reply_msg.delete()
+
+
+@dp.message(Command("userstats"), AdminFilter())
+async def show_user_stats(message: Message):
+    """Показать статистику пользователя с графиком активности"""
+    try:
+        if not message.reply_to_message:
+            msg = await message.reply("ℹ️ Ответьте на сообщение пользователя")
+            await asyncio.sleep(10)
+            await msg.delete()
+            return
+
+        target_user = message.reply_to_message.from_user
+        user_id = str(target_user.id)
+        stats_data = load_stats()
+        mod_data = load_data()
+        user_stats = stats_data.get(user_id, {})
+
+        # Формируем текстовую часть
+        stats_text = (
+            f"📊 <b>Статистика пользователя</b> {target_user.mention_html()}:\n\n"
+            f"🆔 ID: <code>{user_id}</code>\n"
+            f"👤 Имя: {target_user.full_name}\n"
+            f"✉️ Всего сообщений: <b>{user_stats.get('total_messages', 0)}</b>\n"
+            f"⚠️ Предупреждений: <b>{mod_data['warnings'].get(user_id, 0)}/{MAX_WARNINGS}</b>\n"
+        )
+
+        # Отправляем текстовую часть
+        reply_msg = await message.reply(stats_text, parse_mode="HTML")
+
+        # Генерируем и отправляем график если есть данные
+        if user_stats.get('activity'):
+            try:
+                # Подготовка данных
+                dates = []
+                counts = []
+                # Подготовка данных с правильным парсингом дат
+                sorted_activity = sorted(
+                    [(datetime.strptime(date, '%Y-%m-%d'), count)
+                     for date, count in user_stats['activity'].items()],
+                    key=lambda x: x[0]
+                )[-30:]
+
+                # Преобразуем даты обратно в строки для отображения
+                dates = [date.strftime('%Y-%m-%d') for date, _ in sorted_activity]
+                counts = [count for _, count in sorted_activity]
+
+                # Создаем график
+                plt.style.use('seaborn-v0_8')
+                fig, ax = plt.subplots(figsize=(12, 6))
+
+                # Основной график
+                bars = ax.bar(dates, counts, color='#4CAF50', alpha=0.8)
+
+                # Настройки графика
+                ax.set_title(f'Активность {target_user.full_name}')
+                ax.set_xlabel('Дата')
+                ax.set_ylabel('Сообщений')
+                plt.xticks(rotation=45)
+                plt.tight_layout()
+
+                # Сохраняем в буфер
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+                plt.close()
+
+                # Правильное создание InputFile
+                buf.seek(0)
+                input_file = types.BufferedInputFile(buf.read(), filename='activity.png')
+
+                # Отправляем фото
+                reply_photo = await message.answer_photo(
+                    input_file,
+                    caption=f"📈 Активность за {len(dates)} дней"
+                )
+                await asyncio.sleep(AUTO_REMOVE * 3)
+                await reply_photo.delete()
+            except Exception as e:
+                logger.error(f"Ошибка генерации графика: {e}", exc_info=True)
+            finally:
+                buf.close()
+
+        # Удаляем текстовое сообщение через 300 сек
+        await asyncio.sleep(AUTO_REMOVE * 3)
+        await reply_msg.delete()
+
+    except Exception as e:
+        logger.error(f"Ошибка в команде userstats: {e}", exc_info=True)
+        error_msg = await message.reply("❌ Ошибка при получении статистики")
+        await asyncio.sleep(10)
+        await error_msg.delete()
+
+
+async def delete_later(filepath: str, delay: int = 300):
+    """Удаление файла с задержкой"""
+    await asyncio.sleep(delay)
+    try:
+        os.remove(filepath)
+    except Exception as e:
+        logger.error(f"Ошибка удаления файла {filepath}: {e}")
+
+
+# ======================
+# ОБРАБОТКА СООБЩЕНИЙ
+# ======================
 
 
 @dp.message(
@@ -739,7 +849,7 @@ async def handle_video_note(message: Message):
             logger.error(f"Ошибка при удалении сообщения: {delete_error}")
 
 
-# Модифицируем обработчик пересланных сообщений
+# обработчик пересланных сообщений
 @dp.message(
     F.chat.type.in_({ChatType.SUPERGROUP, ChatType.GROUP}),
     F.forward_from_chat,
@@ -798,6 +908,28 @@ async def check_regular_message(message: Message):
         data = load_data()
         user_id = str(message.from_user.id)
         chat_id = message.chat.id
+        current_date = message.date.strftime('%Y-%m-%d')
+
+        # Загружаем текущую статистику
+        stats = load_stats()
+
+        # Инициализируем структуру для нового пользователя
+        if user_id not in stats:
+            stats[user_id] = {
+                'total_messages': 0,
+                'activity': {},
+                'username': message.from_user.username,
+                'full_name': message.from_user.full_name,
+                'first_seen': current_date
+            }
+
+        # Обновляем статистику
+        stats[user_id]['total_messages'] += 1
+        stats[user_id]['activity'][current_date] = stats[user_id]['activity'].get(current_date, 0) + 1
+        stats[user_id]['last_active'] = current_date
+
+        # Сохраняем обновлённые данные
+        save_stats(stats)
 
         # Проверка ограниченных пользователей
         if user_id in data.get('restricted_users', {}).get('fully_restricted', {}):
@@ -1013,13 +1145,10 @@ async def on_startup():
 
 async def main():
     dp.startup.register(on_startup)
-    for chat_id in CHAT_IDS:
-        asyncio.create_task(scheduled_parsing(chat_id))
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    import asyncio
     try:
         asyncio.run(main())
     except Exception as e:

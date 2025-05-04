@@ -13,7 +13,7 @@ WORKDIR /app
 # Копируем зависимости
 COPY requirements.txt .
 
-# Устанавливаем зависимости
+# Устанавливаем зависимости Python
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Копируем исходный код
@@ -27,11 +27,6 @@ RUN printf '{\n\
             "no_links": {},\n\
             "fully_restricted": {},\n\
             "no_forwards": {}\n\
-        },\n\
-        "user_stats": {},\n\
-        "parsing_state": {\n\
-            "last_parsed_date": null,\n\
-            "last_parsed_id": null\n\
         }\n\
     }' > /app/moderation_data.json && \
     chmod 666 /app/moderation_data.json
@@ -40,7 +35,14 @@ RUN printf '{\n\
 RUN touch /app/moderation.log && \
     chmod 666 /app/moderation.log
 
-# Создаем директорию для временных файлов графиков
+
+# Создаем файл статистики с полной структурой
+RUN printf '{\n\
+    }' > /app/user_stats.json && \
+    chmod 666 /app/user_stats.json
+
+
+# Создаем директорию для временных файлов
 RUN mkdir -p /app/tmp && \
     chmod 777 /app/tmp
 
