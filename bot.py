@@ -91,8 +91,6 @@ def init_data_file():
     data_dir = '/app'
     data_file = os.path.join(data_dir, DATA_FILE)
 
-    os.makedirs(data_dir, exist_ok=True)
-
     if not os.path.exists(data_file):
         initial_data = {
             "warnings": {},
