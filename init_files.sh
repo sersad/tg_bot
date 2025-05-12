@@ -8,7 +8,7 @@ echo '{
     "fully_restricted": {},
     "no_forwards": {}
   },
-  "user_stats": {}
+  "banned_channels": {}
 }' > moderation_data.json
 
 echo '{}' > user_stats.json

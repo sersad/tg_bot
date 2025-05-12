@@ -99,7 +99,8 @@ def init_data_file():
                 "no_links": {},
                 "fully_restricted": {},
                 "no_forwards": {}
-            }
+            },
+            "banned_channels": {}  # Новая секция для заблокированных каналов
         }
         with open(data_file, 'w') as f:
             json.dump(initial_data, f, indent=4)
@@ -116,7 +117,8 @@ def load_data() -> dict:
             "no_links": {},
             "fully_restricted": {},
             "no_forwards": {}
-        }
+        },
+        "banned_channels": {}  # Новая секция для заблокированных каналов
     }
 
     try:
@@ -633,6 +635,87 @@ async def show_forward_restrictions(message: Message):
         await error_msg.delete()
 
 
+@dp.message(Command("ban_channel"), AdminFilter())
+async def ban_channel_handler(message: Message):
+    """Блокировка пересылки контента из канала"""
+    try:
+        if not message.reply_to_message or not message.reply_to_message.forward_from_chat:
+            msg = await message.reply("ℹ️ Ответьте на пересланное сообщение из канала, который нужно заблокировать")
+            await asyncio.sleep(10)
+            await msg.delete()
+            return
+
+        channel = message.reply_to_message.forward_from_chat
+        if channel.type != "channel":
+            msg = await message.reply("❌ Это не канал! Можно блокировать только каналы")
+            await asyncio.sleep(10)
+            await msg.delete()
+            return
+
+        data = load_data()
+        channel_id = str(channel.id)
+
+        if "banned_channels" not in data:
+            data["banned_channels"] = {}
+
+        data["banned_channels"][channel_id] = {
+            "title": channel.title,
+            "username": channel.username,
+            "banned_by": message.from_user.id,
+            "banned_at": datetime.now().isoformat()
+        }
+
+        save_data(data)
+
+        await message.reply(
+            f"🚫 Канал <b>{channel.title}</b> (@{channel.username or 'нет'}) заблокирован.\n"
+            f"Пересылка контента из этого канала теперь запрещена.",
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка блокировки канала: {e}", exc_info=True)
+        await message.reply("❌ Произошла ошибка при блокировке канала")
+
+
+@dp.message(Command("unban_channel"), AdminFilter())
+async def unban_channel_handler(message: Message):
+    """Разблокировка пересылки контента из канала"""
+    try:
+        # Проверяем, что команда вызвана ответом на пересланное сообщение
+        if not message.reply_to_message or not message.reply_to_message.forward_from_chat:
+            msg = await message.reply("ℹ️ Ответьте на пересланное сообщение из канала, который нужно разблокировать")
+            await asyncio.sleep(10)
+            await msg.delete()
+            return
+
+        channel = message.reply_to_message.forward_from_chat
+        data = load_data()
+        channel_id = str(channel.id)
+
+        # Проверяем, есть ли канал в списке заблокированных
+        if "banned_channels" not in data or channel_id not in data["banned_channels"]:
+            msg = await message.reply("ℹ️ Этот канал не заблокирован")
+            await asyncio.sleep(10)
+            await msg.delete()
+            return
+
+        # Удаляем канал из списка заблокированных
+        channel_info = data["banned_channels"].pop(channel_id)
+        save_data(data)
+
+        await message.reply(
+            f"✅ Канал <b>{channel_info['title']}</b> (@{channel_info.get('username', 'нет')}) разблокирован.\n"
+            f"Пересылка контента из этого канала снова разрешена.",
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка разблокировки канала: {e}", exc_info=True)
+        await message.reply("❌ Произошла ошибка при разблокировке канала")
+
+
+
 @dp.message(Command("help"))
 async def handle_help(message: Message):
     """Обработчик команды /help"""
@@ -659,6 +742,8 @@ async def show_admin_help(message: Message):
 <code>/allow_links</code> - Разрешить ссылки (ответьте на сообщение)
 <code>/ban_forwards</code> - Запретить пересылку (ответьте на сообщение)
 <code>/allow_forwards</code> - Разрешить пересылку (ответьте на сообщение)
+<code>/ban_channel</code> - Запретить пересылку из канала (ответьте на пересланное сообщение)
+<code>/unban_channel</code> - Разрешить пересылку из канала (ответьте на пересланное сообщение)
 <code>/userstats</code> - Статистика пользователя (ответьте на сообщение) 
 <code>/restricted_list</code> - Список ограниченных
 <code>/link_restrictions</code> - Кто не может отправлять ссылки
@@ -849,19 +934,43 @@ async def handle_video_note(message: Message):
             logger.error(f"Ошибка при удалении сообщения: {delete_error}")
 
 
-# обработчик пересланных сообщений
 @dp.message(
-    F.chat.type.in_({ChatType.SUPERGROUP, ChatType.GROUP}),
+    F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),
     F.forward_from_chat,
     F.forward_from_chat.type == "channel"
 )
 async def handle_channel_forward(message: Message):
-    """Обработка пересланных сообщений из каналов"""
+    """Унифицированный обработчик пересланных сообщений из каналов"""
     try:
         user_id = str(message.from_user.id)
         data = load_data()
+        channel = message.forward_from_chat
+        channel_id = str(channel.id)
 
-        # Проверка, запрещена ли пересылка для этого пользователя
+        # 1. Проверка блокировки канала
+        if "banned_channels" in data and channel_id in data["banned_channels"]:
+            await message.delete()
+            channel_info = data["banned_channels"][channel_id]
+
+            warning = await message.answer(
+                f"⛔ {message.from_user.mention_html()}, пересылка из канала "
+                f"<b>{channel_info['title']}</b> запрещена",
+                parse_mode="HTML"
+            )
+
+            await handle_rule_break(
+                message=message,
+                reason=f"пересылка из заблокированного канала {channel_info['title']}",
+                data=data,
+                user_id=user_id,
+                chat_id=message.chat.id
+            )
+
+            await asyncio.sleep(10)
+            await warning.delete()
+            return
+
+        # 2. Проверка запрета пересылки для пользователя
         if user_id in data['restricted_users']['no_forwards']:
             await message.delete()
             reply_msg = await message.answer(
@@ -872,23 +981,34 @@ async def handle_channel_forward(message: Message):
             await reply_msg.delete()
             return
 
-        # Остальная логика обработки пересылок (если нужно)
-        channel = message.forward_from_chat
-        logger.info(f"Переслано из канала: {channel.title} [ID:{channel.id}]")
-
-        text = message.text or message.caption or (message.document.file_name if message.document else "")
-
+        # 3. Проверка запрещённых фраз в тексте
+        text = message.text or message.caption or ""
         if text and any(phrase in text.lower() for phrase in BANNED_PHRASES):
             await handle_rule_break(
                 message=message,
-                reason=f"пересылка из канала {channel.title}",
+                reason=f"пересылка из канала {channel.title} с запрещённой фразой",
                 data=data,
                 user_id=user_id,
                 chat_id=message.chat.id
             )
+            return
+
+        # 4. Проверка запрещённых фраз в документах
+        if message.document and message.document.file_name:
+            filename = message.document.file_name.lower()
+            if any(phrase in filename for phrase in BANNED_PHRASES):
+                await handle_rule_break(
+                    message=message,
+                    reason=f"пересылка файла с запрещённым названием из канала {channel.title}",
+                    data=data,
+                    user_id=user_id,
+                    chat_id=message.chat.id
+                )
+                return
+
     except Exception as e:
-        logger.error(f"Ошибка обработки пересланного сообщения: {e}")
-        error_msg = await message.reply("⚠️ Ошибка обработки пересланного сообщения")
+        logger.error(f"Ошибка обработки пересланного сообщения: {e}", exc_info=True)
+        error_msg = await message.reply("⚠️ Ошибка обработки сообщения")
         await asyncio.sleep(AUTO_REMOVE)
         await error_msg.delete()
 
